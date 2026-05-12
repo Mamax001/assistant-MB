@@ -4,12 +4,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 
-st.set_page_config(page_title="Terminal PEA Intelligent", layout="wide")
+st.set_page_config(page_title="Assistant PEA Stratégique", layout="wide")
 
-# --- FONCTION MAGIQUE : NOM -> TICKER ---
-def trouver_ticker_par_nom(nom):
+# --- FONCTION DE RECHERCHE INTELLIGENTE ---
+def trouver_ticker(nom):
     try:
-        # On interroge l'API de suggestion de Yahoo Finance
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
         data = res.json()
@@ -20,58 +19,65 @@ def trouver_ticker_par_nom(nom):
     return None
 
 # --- INTERFACE ---
-st.title("🚀 Terminal PEA : Recherche par Nom")
-st.sidebar.header("🔍 Quelle entreprise ?")
+st.title("🚀 Mon Assistant PEA Intelligent")
+st.sidebar.header("⚙️ Paramètres du Trade")
 
-nom_saisi = st.sidebar.text_input("Nom de l'entreprise", value="Air Liquide")
+nom_saisi = st.sidebar.text_input("Nom de l'entreprise (ex: Air Liquide, LVMH)", value="Air Liquide")
+budget_total = st.sidebar.number_input("Budget total pour cette ligne (€)", min_value=10, value=1000)
 
 if nom_saisi:
-    # 1. On cherche le ticker correspondant
-    ticker_officiel = trouver_ticker_par_nom(nom_saisi)
+    ticker = trouver_ticker(nom_saisi)
     
-    if ticker_officiel:
-        # 2. On télécharge les données avec le ticker trouvé
-        stock = yf.Ticker(ticker_officiel)
+    if ticker:
+        stock = yf.Ticker(ticker)
         info = stock.info
-        hist = stock.history(period="6mo")
+        hist = stock.history(period="1y") # On prend 1 an pour une meilleure strat
 
         if not hist.empty:
-            # --- RÉCAPITULATIF POUR BOURSOBANK ---
-            st.subheader(f"✅ Résultat pour : {info.get('longName', nom_saisi)}")
+            prix_actuel = hist['Close'].iloc[-1]
             
+            # --- RÉCAPITULATIF BOURSOBANK ---
+            st.subheader(f"🏢 Infos pour BoursoBank : {info.get('longName', nom_saisi)}")
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.success(f"**Code ISIN**\n\n{info.get('isin', 'À vérifier sur Bourso')}")
+                st.info(f"**Code ISIN** (à copier)\n\n{info.get('isin', 'Non disponible')}")
             with c2:
-                st.success(f"**Ticker à utiliser**\n\n{ticker_officiel}")
+                st.info(f"**Symbole / Ticker**\n\n{ticker}")
             with c3:
-                st.success(f"**Place boursière**\n\n{info.get('exchange', 'N/A')}")
+                st.info(f"**Place de cotation**\n\n{info.get('exchange', 'N/A')}")
 
             st.divider()
 
-            # --- ANALYSE DÉCISIONNELLE ---
-            prix_actuel = hist['Close'].iloc[-1]
+            # --- STRATÉGIE D'INVESTISSEMENT ---
+            st.subheader("💡 Stratégie d'investissement conseillée")
+            
+            # Calculs stratégiques
+            nb_actions = int(budget_total // prix_actuel)
             ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-            signal = "ACHAT" if prix_actuel > ma20 else "VENTE"
-            couleur = "green" if signal == "ACHAT" else "red"
+            volatilite = hist['Close'].pct_change().std() * 100
+            
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Quantité à acheter", f"{nb_actions} actions")
+            s2.metric("Montant estimé", f"{(nb_actions * prix_actuel):.2f} €")
+            
+            # Durée suggérée selon la volatilité
+            duree = "Long terme (5 ans+)" if volatilite < 2 else "Moyen terme (1-3 ans)"
+            s3.metric("Horizon suggéré", duree)
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Prix Actuel", f"{prix_actuel:.2f} €")
-            m2.metric("Moyenne Mobile (20j)", f"{ma20:.2f} €")
-            m3.markdown(f"**Signal Trade :**\n<h2 style='color:{couleur};'>{signal}</h2>", unsafe_allow_html=True)
+            # Signal Technique
+            signal = "ACHAT" if prix_actuel > ma20 else "ATTENTE / VENTE"
+            couleur = "green" if signal == "ACHAT" else "orange"
+            st.markdown(f"**Conseil immédiat :** <span style='color:{couleur}; font-weight:bold; font-size:20px;'>{signal}</span>", unsafe_allow_html=True)
+            
+            st.warning(f"👉 **Méthode d'ordre sur BoursoBank :** Utilisez un 'Ordre à cours limité' à **{prix_actuel:.2f} €** pour maîtriser votre prix d'entrée.")
 
             # --- GRAPHIQUE ---
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name="Cours", line=dict(color="#00D4FF", width=2)))
-            fig.update_layout(title="Historique 6 mois", template="plotly_dark", height=400)
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name="Cours", line=dict(color="#00D4FF")))
+            fig.update_layout(title="Historique du cours (1 an)", template="plotly_dark", height=400)
             st.plotly_chart(fig, use_container_width=True)
-            
-            # --- INFOS COMPLÉMENTAIRES ---
-            with st.expander("📝 Détails de l'entreprise"):
-                st.write(info.get('longBusinessSummary', 'Pas de résumé.'))
-        else:
-            st.error("Données de marché indisponibles pour ce titre.")
-    else:
-        st.error("Impossible de trouver cette entreprise. Essayez d'être plus précis (ex: 'LVMH' au lieu de 'Louis Vuitton').")
 
-st.sidebar.warning("Vérifiez toujours que le Code ISIN correspond bien sur BoursoBank avant de passer l'ordre.")
+        else:
+            st.error("Impossible de récupérer les prix historiques.")
+    else:
+        st.error("Entreprise non trouvée. Essayez d'être plus précis.")
