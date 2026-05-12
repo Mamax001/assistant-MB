@@ -2,107 +2,85 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 
-st.set_page_config(page_title="Terminal PEA Haute Efficacité", layout="wide")
+st.set_page_config(page_title="Terminal PEA Expert", layout="wide")
 
-# --- PERSISTENCE DE L'HISTORIQUE ---
-if 'portefeuille' not in st.session_state:
-    st.session_state.portefeuille = []
+# --- INITIALISATION ---
+if 'historique' not in st.session_state:
+    st.session_state.historique = []
 
-# --- FONCTIONS TECHNIQUES ---
-def trouver_ticker(nom):
-    try:
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        data = res.json()
-        return data['quotes'][0]['symbol'] if data['quotes'] else None
-    except:
-        return None
+def generer_analyse_ia(info, hist):
+    prix = hist['Close'].iloc[-1]
+    ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+    diff = ((prix - ma20) / ma20) * 100
+    
+    if prix > ma20 * 1.02:
+        return "ACHAT ✅", f"Tendance haussière confirmée (+{diff:.1f}% vs moyenne). Le momentum est bon pour entrer."
+    elif prix < ma20 * 0.98:
+        return "ATTENTE ⚠️", f"Le titre s'affaiblit ({diff:.1f}% vs moyenne). Risque de baisse continu, restez prudent."
+    return "OBSERVATION ⏳", "Le titre consolide horizontalement. Attendez un signal plus franc."
 
-def calculer_conseil(prix, ma20):
-    if prix > ma20 * 1.02: return "ACHAT ✅"
-    if prix < ma20 * 0.98: return "VENTE ⚠️"
-    return "ATTENTE ⏳"
+# --- RECHERCHE ---
+st.title("🚀 Mon Terminal PEA Intelligent")
+st.sidebar.header("🔍 Analyse de Valeur")
 
-# --- INTERFACE DE RECHERCHE ---
-st.title("🚀 Dashboard PEA Haute Performance")
-st.sidebar.header("🔍 Nouvel Ordre")
-
-nom_saisi = st.sidebar.text_input("Nom de l'entreprise", placeholder="Ex: Air Liquide...")
-budget = st.sidebar.number_input("Budget (€)", min_value=10, value=1000, step=100)
+nom_saisi = st.sidebar.text_input("Entreprise (ex: Air Liquide, LVMH, TTE.PA)")
+budget = st.sidebar.number_input("Budget (€)", min_value=10, value=1000)
 
 if nom_saisi:
-    ticker = trouver_ticker(nom_saisi)
-    if ticker:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")
+    # Correspondance rapide pour faciliter la saisie
+    dict_tickers = {"Air Liquide": "AI.PA", "LVMH": "MC.PA", "Total": "TTE.PA", "Hermes": "RMS.PA"}
+    ticker = dict_tickers.get(nom_saisi, nom_saisi)
+    
+    stock = yf.Ticker(ticker)
+    hist = stock.history(period="1y")
+    
+    if not hist.empty:
+        prix_actuel = float(hist['Close'].iloc[-1])
+        isin = stock.info.get('isin', 'N/A')
+        nom_complet = stock.info.get('longName', nom_saisi)
         
-        if not hist.empty:
-            prix_actuel = float(hist['Close'].iloc[-1])
-            ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-            nb_actions = int(budget // prix_actuel)
-            isin = stock.info.get('isin', 'N/A')
-            nom_reel = stock.info.get('longName', nom_saisi)
+        # --- ANALYSE IA ---
+        verdict, raison = generer_analyse_ia(stock.info, hist)
+        st.subheader(f"🧠 Analyse Stratégique : {nom_complet}")
+        
+        c1, c2 = st.columns([1, 2])
+        c1.metric("Conseil", verdict)
+        c2.info(f"**Analyse de l'IA :** {raison}")
 
-            # --- PANNEAU DE CONFIRMATION D'ORDRE ---
-            st.subheader(f"✅ Configuration de l'ordre : {nom_reel}")
-            
-            # Tableau récapitulatif pour BoursoBank
-            recap_ordre = {
-                "Champ BoursoBank": ["Valeur / ISIN", "Quantité", "Type d'ordre", "Prix Limite"],
-                "Donnée à saisir": [isin, nb_actions, "À cours limité", f"{prix_actuel:.2f} €"]
-            }
-            st.table(pd.DataFrame(recap_ordre))
+        # --- RECAP BOURSOBANK ---
+        st.markdown("### 📝 Détails de l'ordre (BoursoBank)")
+        nb_actions = int(budget // prix_actuel)
+        df_ordre = pd.DataFrame({
+            "Champ": ["Code ISIN", "Quantité", "Type d'ordre", "Prix Limite"],
+            "Valeur": [isin, nb_actions, "À cours limité", f"{prix_actuel:.2f} €"]
+        })
+        st.table(df_ordre)
 
-            col_btn, col_msg = st.columns([1, 2])
-            with col_btn:
-                if st.button("📈 Ajouter au Dashboard de Suivi"):
-                    st.session_state.portefeuille.append({"ticker": ticker, "nom": nom_reel, "pru": prix_actuel, "isin": isin})
-                    st.success("Ajouté !")
+        if st.button("➕ Ajouter au tableau de suivi"):
+            st.session_state.historique.append({
+                "Date": pd.Timestamp.now().strftime("%d/%m/%Y"),
+                "Valeur": nom_complet,
+                "ISIN": isin,
+                "Prix": f"{prix_actuel:.2f}€",
+                "Conseil": verdict
+            })
 
-            # Graphique rapide
-            fig = go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color="#00D4FF")))
-            fig.update_layout(height=250, margin=dict(l=0, r=0, t=0, b=0), template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color="#00D4FF"))).update_layout(height=250, template="plotly_dark"), use_container_width=True)
 
 st.divider()
 
-# --- DASHBOARD DE SUIVI DYNAMIQUE ---
-st.subheader("📊 Mon Dashboard de Suivi en Temps Réel")
-
-if st.session_state.portefeuille:
-    lignes_recap = []
+# --- TABLEAU RÉCAPITULATIF ---
+st.subheader("📋 Mon Journal de Bord (Session Actuelle)")
+if st.session_state.historique:
+    df_final = pd.DataFrame(st.session_state.historique)
+    st.dataframe(df_final, use_container_width=True)
     
-    for item in st.session_state.portefeuille:
-        # Mise à jour en direct des données pour chaque ligne
-        s = yf.Ticker(item['ticker'])
-        p_live = s.history(period="20d")['Close']
-        prix_maintenant = p_live.iloc[-1]
-        ma20_live = p_live.mean()
-        
-        perf = ((prix_maintenant - item['pru']) / item['pru']) * 100
-        action_requise = calculer_conseil(prix_maintenant, ma20_live)
-        
-        lignes_recap.append({
-            "Entreprise": item['nom'],
-            "ISIN": item['isin'],
-            "Prix Achat": f"{item['pru']:.2f} €",
-            "Prix Actuel": f"{prix_maintenant:.2f} €",
-            "Perf. (%)": f"{perf:+.2f}%",
-            "ACTION REQUISE": action_requise
-        })
+    # Bouton de sauvegarde CSV
+    csv = df_final.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Télécharger mon historique (.csv)", data=csv, file_name="mon_pea_backup.csv", mime="text/csv")
     
-    df_dashboard = pd.DataFrame(lignes_recap)
-    
-    # Affichage stylisé du tableau
-    st.dataframe(df_dashboard.style.applymap(
-        lambda x: 'color: #00ff00' if 'ACHAT' in str(x) else ('color: #ff4b4b' if 'VENTE' in str(x) else ''),
-        subset=['ACTION REQUISE']
-    ), use_container_width=True)
-
-    if st.button("🗑️ Vider le Dashboard"):
-        st.session_state.portefeuille = []
-        st.rerun()
+    if st.button("🗑️ Vider le tableau"):
+        st.session_state.historique = []; st.rerun()
 else:
-    st.info("Recherchez une action pour l'ajouter à votre suivi dynamique.")
+    st.write("Aucun trade enregistré pour le moment.")
