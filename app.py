@@ -2,70 +2,76 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 
-st.set_page_config(page_title="Terminal PEA & BoursoBank", layout="wide")
+st.set_page_config(page_title="Terminal PEA Intelligent", layout="wide")
 
-# --- FONCTION DE RECHERCHE & RÉCAP ---
-@st.cache_data(ttl=300)
-def obtenir_infos_entreprise(ticker):
+# --- FONCTION MAGIQUE : NOM -> TICKER ---
+def trouver_ticker_par_nom(nom):
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return info
+        # On interroge l'API de suggestion de Yahoo Finance
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        data = res.json()
+        if data['quotes']:
+            return data['quotes'][0]['symbol']
     except:
         return None
+    return None
 
 # --- INTERFACE ---
-st.title("📈 Assistant Investissement PEA")
-st.sidebar.header("🔍 Recherche de Titre")
+st.title("🚀 Terminal PEA : Recherche par Nom")
+st.sidebar.header("🔍 Quelle entreprise ?")
 
-# Saisie du Ticker
-ticker_input = st.sidebar.text_input("Ticker (ex: AI.PA, MC.PA, TTE.PA)", value="AI.PA").upper()
+nom_saisi = st.sidebar.text_input("Nom de l'entreprise", value="Air Liquide")
 
-if ticker_input:
-    # Récupération des données
-    data = yf.download(ticker_input, period="6mo", interval="1d", progress=False)
-    details = obtenir_infos_entreprise(ticker_input)
+if nom_saisi:
+    # 1. On cherche le ticker correspondant
+    ticker_officiel = trouver_ticker_par_nom(nom_saisi)
+    
+    if ticker_officiel:
+        # 2. On télécharge les données avec le ticker trouvé
+        stock = yf.Ticker(ticker_officiel)
+        info = stock.info
+        hist = stock.history(period="6mo")
 
-    if not data.empty and details:
-        # --- BLOC RÉCAPITULATIF BOURSOBANK ---
-        st.subheader(f"🏢 Récapitulatif : {details.get('longName', ticker_input)}")
-        
-        col_b1, col_b2, col_b3 = st.columns(3)
-        with col_b1:
-            st.info(f"**Code ISIN (BoursoBank)**\n\n{details.get('isin', 'Non trouvé')}")
-        with col_b2:
-            st.info(f"**Symbole / Ticker**\n\n{ticker_input}")
-        with col_b3:
-            st.info(f"**Secteur d'activité**\n\n{details.get('sector', 'N/A')}")
+        if not hist.empty:
+            # --- RÉCAPITULATIF POUR BOURSOBANK ---
+            st.subheader(f"✅ Résultat pour : {info.get('longName', nom_saisi)}")
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.success(f"**Code ISIN**\n\n{info.get('isin', 'À vérifier sur Bourso')}")
+            with c2:
+                st.success(f"**Ticker à utiliser**\n\n{ticker_officiel}")
+            with c3:
+                st.success(f"**Place boursière**\n\n{info.get('exchange', 'N/A')}")
 
-        st.markdown("---")
+            st.divider()
 
-        # --- ANALYSE DES PERFORMANCES ---
-        prix_actuel = data['Close'].iloc[-1]
-        ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
-        signal = "ACHAT" if prix_actuel > ma20 else "VENTE"
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Prix Actuel", f"{prix_actuel:.2f} €")
-        m2.metric("Moyenne Mobile (20j)", f"{ma20:.2f} €")
-        
-        color = "green" if signal == "ACHAT" else "red"
-        m3.markdown(f"**Signal de tendance :**\n<h2 style='color:{color};'>{signal}</h2>", unsafe_allow_html=True)
+            # --- ANALYSE DÉCISIONNELLE ---
+            prix_actuel = hist['Close'].iloc[-1]
+            ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+            signal = "ACHAT" if prix_actuel > ma20 else "VENTE"
+            couleur = "green" if signal == "ACHAT" else "red"
 
-        # --- GRAPHIQUE ---
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Cours de clôture", line=dict(color="#00ffcc")))
-        fig.update_layout(title=f"Évolution 6 mois - {details.get('longName')}", template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # --- DESCRIPTION DE L'ENTREPRISE ---
-        with st.expander("En savoir plus sur cette entreprise"):
-            st.write(details.get('longBusinessSummary', 'Pas de description disponible.'))
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Prix Actuel", f"{prix_actuel:.2f} €")
+            m2.metric("Moyenne Mobile (20j)", f"{ma20:.2f} €")
+            m3.markdown(f"**Signal Trade :**\n<h2 style='color:{couleur};'>{signal}</h2>", unsafe_allow_html=True)
+
+            # --- GRAPHIQUE ---
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name="Cours", line=dict(color="#00D4FF", width=2)))
+            fig.update_layout(title="Historique 6 mois", template="plotly_dark", height=400)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # --- INFOS COMPLÉMENTAIRES ---
+            with st.expander("📝 Détails de l'entreprise"):
+                st.write(info.get('longBusinessSummary', 'Pas de résumé.'))
+        else:
+            st.error("Données de marché indisponibles pour ce titre.")
     else:
-        st.error("Erreur : Impossible de trouver ce ticker. Vérifiez qu'il s'agit bien d'une action cotée (ex: ajoutez .PA pour Paris).")
+        st.error("Impossible de trouver cette entreprise. Essayez d'être plus précis (ex: 'LVMH' au lieu de 'Louis Vuitton').")
 
-st.sidebar.markdown("""
-**Aide BoursoBank :**
-Pour trouver une action, utilisez le **Code ISIN** affiché dans le récapitulatif. C'est la méthode la plus fiable.
-""")
+st.sidebar.warning("Vérifiez toujours que le Code ISIN correspond bien sur BoursoBank avant de passer l'ordre.")
