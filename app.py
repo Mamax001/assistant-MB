@@ -2,85 +2,97 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 
-st.set_page_config(page_title="Terminal PEA Expert", layout="wide")
+st.set_page_config(page_title="Terminal PEA Universel", layout="wide")
 
 # --- INITIALISATION ---
-if 'historique' not in st.session_state:
-    st.session_state.historique = []
+if 'portefeuille' not in st.session_state:
+    st.session_state.portefeuille = []
 
-def generer_analyse_ia(info, hist):
-    prix = hist['Close'].iloc[-1]
+# --- RECHERCHE UNIVERSELLE (NOM -> TICKER) ---
+def recherche_intelligente(nom):
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        data = res.json()
+        if data['quotes']:
+            return data['quotes'][0]['symbol'], data['quotes'][0].get('longname', nom)
+    except:
+        return None, None
+    return None, None
+
+# --- IA DE DIAGNOSTIC ---
+def analyse_ia_interne(info, hist):
+    prix = float(hist['Close'].iloc[-1])
     ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-    diff = ((prix - ma20) / ma20) * 100
     
-    if prix > ma20 * 1.02:
-        return "ACHAT ✅", f"Tendance haussière confirmée (+{diff:.1f}% vs moyenne). Le momentum est bon pour entrer."
-    elif prix < ma20 * 0.98:
-        return "ATTENTE ⚠️", f"Le titre s'affaiblit ({diff:.1f}% vs moyenne). Risque de baisse continu, restez prudent."
-    return "OBSERVATION ⏳", "Le titre consolide horizontalement. Attendez un signal plus franc."
+    # Analyse de tendance
+    if prix > ma20 * 1.03:
+        verdict = "ACHAT ✅"
+        explication = "Le titre montre une force acheteuse supérieure à sa moyenne. C'est un bon point d'entrée."
+    elif prix < ma20 * 0.97:
+        verdict = "ATTENTE ⚠️"
+        explication = "Le cours chute sous ses supports. Risque de baisse plus profonde, attendez une stabilisation."
+    else:
+        verdict = "OBSERVATION ⏳"
+        explication = "Le prix stagne. Pas de direction claire, mieux vaut patienter."
+    
+    return verdict, explication
 
-# --- RECHERCHE ---
-st.title("🚀 Mon Terminal PEA Intelligent")
-st.sidebar.header("🔍 Analyse de Valeur")
+# --- INTERFACE ---
+st.title("🚀 Terminal PEA Universel")
+st.sidebar.header("🔍 Recherche Rapide")
 
-nom_saisi = st.sidebar.text_input("Entreprise (ex: Air Liquide, LVMH, TTE.PA)")
+nom_saisi = st.sidebar.text_input("Tapez le nom d'une entreprise (ex: Total, Apple, LVMH)")
 budget = st.sidebar.number_input("Budget (€)", min_value=10, value=1000)
 
 if nom_saisi:
-    # Correspondance rapide pour faciliter la saisie
-    dict_tickers = {"Air Liquide": "AI.PA", "LVMH": "MC.PA", "Total": "TTE.PA", "Hermes": "RMS.PA"}
-    ticker = dict_tickers.get(nom_saisi, nom_saisi)
+    ticker, nom_propre = recherche_intelligente(nom_saisi)
     
-    stock = yf.Ticker(ticker)
-    hist = stock.history(period="1y")
-    
-    if not hist.empty:
-        prix_actuel = float(hist['Close'].iloc[-1])
-        isin = stock.info.get('isin', 'N/A')
-        nom_complet = stock.info.get('longName', nom_saisi)
+    if ticker:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1y")
         
-        # --- ANALYSE IA ---
-        verdict, raison = generer_analyse_ia(stock.info, hist)
-        st.subheader(f"🧠 Analyse Stratégique : {nom_complet}")
-        
-        c1, c2 = st.columns([1, 2])
-        c1.metric("Conseil", verdict)
-        c2.info(f"**Analyse de l'IA :** {raison}")
+        if not hist.empty:
+            prix_actuel = float(hist['Close'].iloc[-1])
+            isin = stock.info.get('isin', 'N/A')
+            
+            # --- BLOC IA ---
+            verdict, raison = analyse_ia_interne(stock.info, hist)
+            st.subheader(f"🏢 Analyse : {nom_propre}")
+            
+            c1, c2 = st.columns([1, 2])
+            c1.metric("Conseil Stratégique", verdict)
+            c2.info(f"**Pourquoi ?** {raison}")
 
-        # --- RECAP BOURSOBANK ---
-        st.markdown("### 📝 Détails de l'ordre (BoursoBank)")
-        nb_actions = int(budget // prix_actuel)
-        df_ordre = pd.DataFrame({
-            "Champ": ["Code ISIN", "Quantité", "Type d'ordre", "Prix Limite"],
-            "Valeur": [isin, nb_actions, "À cours limité", f"{prix_actuel:.2f} €"]
-        })
-        st.table(df_ordre)
-
-        if st.button("➕ Ajouter au tableau de suivi"):
-            st.session_state.historique.append({
-                "Date": pd.Timestamp.now().strftime("%d/%m/%Y"),
-                "Valeur": nom_complet,
-                "ISIN": isin,
-                "Prix": f"{prix_actuel:.2f}€",
-                "Conseil": verdict
+            # --- TABLEAU BOURSOBANK ---
+            st.markdown("### 🛒 Infos pour ton ordre BoursoBank")
+            nb_actions = int(budget // prix_actuel)
+            df_ordre = pd.DataFrame({
+                "Paramètre Bourso": ["Code ISIN", "Symbole", "Quantité", "Prix Limite"],
+                "Valeur à saisir": [isin, ticker, nb_actions, f"{prix_actuel:.2f} €"]
             })
+            st.table(df_ordre)
 
-        st.plotly_chart(go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color="#00D4FF"))).update_layout(height=250, template="plotly_dark"), use_container_width=True)
+            if st.button("➕ Enregistrer ce trade"):
+                st.session_state.portefeuille.append({
+                    "Entreprise": nom_propre,
+                    "ISIN": isin,
+                    "Prix": f"{prix_actuel:.2f}€",
+                    "Décision": verdict
+                })
+                st.success("Ajouté au tableau ci-dessous !")
+
+            st.plotly_chart(go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color="#00D4FF"))).update_layout(height=250, template="plotly_dark"), use_container_width=True)
+    else:
+        st.error("Entreprise introuvable. Essayez d'être plus précis ou utilisez le Ticker (ex: AI.PA).")
 
 st.divider()
 
 # --- TABLEAU RÉCAPITULATIF ---
-st.subheader("📋 Mon Journal de Bord (Session Actuelle)")
-if st.session_state.historique:
-    df_final = pd.DataFrame(st.session_state.historique)
-    st.dataframe(df_final, use_container_width=True)
-    
-    # Bouton de sauvegarde CSV
-    csv = df_final.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Télécharger mon historique (.csv)", data=csv, file_name="mon_pea_backup.csv", mime="text/csv")
-    
-    if st.button("🗑️ Vider le tableau"):
-        st.session_state.historique = []; st.rerun()
-else:
-    st.write("Aucun trade enregistré pour le moment.")
+st.subheader("📋 Historique de la session")
+if st.session_state.portefeuille:
+    st.dataframe(pd.DataFrame(st.session_state.portefeuille), use_container_width=True)
+    if st.button("🗑️ Vider l'historique"):
+        st.session_state.portefeuille = []; st.rerun()
