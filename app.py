@@ -4,76 +4,76 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
-import requests
 
 st.set_page_config(page_title="Terminal PEA Pro", layout="wide")
 
-# --- INITIALISATION ---
-if 'portefeuille' not in st.session_state:
-    st.session_state.portefeuille = []
+# --- STYLE ---
+st.markdown("""<style> .main { background-color: #0e1117; } </style>""", unsafe_allow_html=True)
 
-def trouver_ticker(nom):
-    try:
-        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        data = res.json()
-        return data['quotes']['symbol'] if data['quotes'] else None
-    except: return None
-
-# --- INTERFACE ---
-st.title("🏛️ Terminal PEA : Analyse & Prévisions")
-
+# --- SIDEBAR ---
 with st.sidebar:
-    nom_saisi = st.sidebar.text_input("Entreprise", value="Air Liquide")
-    budget = st.sidebar.number_input("Budget (€)", min_value=50, value=1000)
+    st.header("🏛️ Paramètres")
+    # On demande directement le Ticker pour éviter les bugs de recherche (ex: CS.PA pour AXA)
+    ticker_input = st.text_input("Ticker (ex: CS.PA, AI.PA, MC.PA)", value="CS.PA").upper()
+    budget = st.number_input("Budget (€)", min_value=10, value=120)
+    lancer = st.button("🚀 Lancer l'Analyse")
 
-if nom_saisi:
-    ticker = trouver_ticker(nom_saisi)
-    if ticker:
-        stock = yf.Ticker(ticker)
+st.title("📈 Terminal PEA : Analyse & Prévisions")
+
+if lancer:
+    with st.spinner('Analyse du marché en cours...'):
+        stock = yf.Ticker(ticker_input)
         hist = stock.history(period="1y")
-        
+
         if not hist.empty:
-            tab1, tab2 = st.tabs(["🎯 Analyse & Ordre", "🔮 Prévisions à 30j"])
+            prix_actuel = float(hist['Close'].iloc[-1])
+            
+            # --- ONGLETS ---
+            tab1, tab2 = st.tabs(["🎯 Analyse & Ordre", "🔮 Prévisions 30j"])
 
             with tab1:
-                prix_actuel = float(hist['Close'].iloc[-1])
-                st.metric("Prix Actuel", f"{prix_actuel:.2f} €")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Prix Actuel", f"{prix_actuel:.2f} €")
                 
-                st.subheader("📝 Ordre BoursoBank")
+                # ISIN (souvent disponible dans info)
+                isin = stock.info.get('isin', 'À vérifier sur Bourso')
+                col2.metric("Code ISIN", isin)
+                
+                # Stratégie Quantité
                 nb_actions = int(budget // prix_actuel)
-                st.table(pd.DataFrame({
-                    "ISIN/Ticker": [ticker],
-                    "Quantité": [nb_actions],
-                    "Prix Limite": [f"{prix_actuel:.2f} €"]
-                }))
+                col3.metric("Actions à acheter", nb_actions)
+
+                st.success(f"**Ordre BoursoBank :** Acheter **{nb_actions}** actions **{ticker_input}** à cours limité (**{prix_actuel:.2f} €**).")
+                
+                # Graphique Simple
+                fig_hist = go.Figure(go.Scatter(x=hist.index, y=hist['Close'], name="Cours", line=dict(color="#00D4FF")))
+                fig_hist.update_layout(template="plotly_dark", height=350, margin=dict(l=0,r=0,t=20,b=0))
+                st.plotly_chart(fig_hist, use_container_width=True)
 
             with tab2:
-                try:
-                    # Préparation des données
-                    df = hist[['Close']].reset_index()
-                    df['n'] = range(len(df))
-                    
-                    # Modèle simple
-                    X = df[['n']].values[-100:] # On s'appuie sur les 100 derniers jours
-                    y = df['Close'].values[-100:]
-                    model = LinearRegression().fit(X, y)
-                    
-                    # Projection
-                    futur = np.array(range(len(df), len(df) + 30)).reshape(-1, 1)
-                    prev = model.predict(futur)
-                    
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(y=y, name="Historique récent", line=dict(color="#00D4FF")))
-                    fig.add_trace(go.Scatter(x=list(range(100, 130)), y=prev, name="Projection", line=dict(color="orange", dash="dash")))
-                    fig.update_layout(template="plotly_dark", height=300)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    diff = ((prev[-1] - prix_actuel) / prix_actuel) * 100
-                    st.write(f"**Tendance estimée :** {diff:+.2f}% d'ici 30 jours.")
-                except:
-                    st.warning("Calcul de prévision indisponible pour ce titre.")
-
-# --- DIVERS DE SÉCURITÉ ---
-if st.button("🗑️ Vider la session"):
-    st.session_state.portefeuille = []; st.rerun()
+                # --- PRÉVISIONS ---
+                df = hist[['Close']].reset_index()
+                df['n'] = range(len(df))
+                
+                # Modèle
+                X = df[['n']].values[-100:]
+                y = df['Close'].values[-100:]
+                model = LinearRegression().fit(X, y)
+                
+                # Projection
+                futur = np.array(range(len(df), len(df) + 30)).reshape(-1, 1)
+                preds = model.predict(futur)
+                
+                fig_pred = go.Figure()
+                fig_pred.add_trace(go.Scatter(y=y, name="Récent", line=dict(color="#00D4FF")))
+                fig_pred.add_trace(go.Scatter(x=list(range(100, 130)), y=preds, name="Prévision", line=dict(color="orange", dash="dash")))
+                fig_pred.update_layout(template="plotly_dark", height=350)
+                st.plotly_chart(fig_pred, use_container_width=True)
+                
+                diff = ((preds[-1] - prix_actuel) / prix_actuel) * 100
+                st.write(f"**Tendance estimée à 30 jours :** {diff:+.2f}%")
+                
+        else:
+            st.error("Données introuvables. Vérifiez le Ticker (n'oubliez pas le .PA pour Paris, ex: CS.PA pour AXA).")
+else:
+    st.info("Entrez un Ticker dans la barre latérale et cliquez sur 'Lancer l'Analyse' pour commencer.")
