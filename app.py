@@ -1,137 +1,98 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+from sklearn.linear_model import LinearRegression
 import requests
 
-# --- CONFIGURATION PRO ---
-st.set_page_config(page_title="PEA Terminal Pro", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal PEA Prédictif", layout="wide")
 
+# --- INITIALISATION & RECHERCHE ---
 if 'portefeuille' not in st.session_state:
     st.session_state.portefeuille = []
 
-# --- MOTEUR DE RECHERCHE & CALCULS ---
-def recherche_universelle(nom):
+def trouver_ticker(nom):
     try:
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={nom}&quotesCount=1"
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
         data = res.json()
-        if data['quotes']:
-            return data['quotes'][0]['symbol'], data['quotes'][0].get('longname', nom)
-    except: return None, None
-    return None, None
+        return data['quotes']['symbol'] if data['quotes'] else None
+    except: return None
 
-def calculer_frais(montant):
-    # Simulation tarif 'Découverte' BoursoBank (adaptable)
-    if montant <= 500: return 1.99
-    return montant * 0.005 # 0.5% au-delà
-
-def analyse_expert_ia(info, hist):
-    prix = float(hist['Close'].iloc[-1])
-    ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-    ma50 = hist['Close'].rolling(window=50).mean().iloc[-1]
-    rendement = info.get('dividendRate', 0)
-    
-    score = 0
-    if prix > ma20: score += 1
-    if ma20 > ma50: score += 1
-    if info.get('returnOnEquity', 0) > 0.15: score += 1
-    
-    # Verdict
-    if score >= 2: verdict, couleur = "ACHAT FORT ✅", "green"
-    elif score == 1: verdict, couleur = "OBSERVATION ⏳", "orange"
-    else: verdict, couleur = "VENTE / ATTENTE ⚠️", "red"
-    
-    # Texte de stratégie
-    stop_loss = prix * 0.92 # -8% par défaut
-    objectif = prix * 1.15 # +15%
-    
-    synthèse = f"""
-    **Analyse Fondamentale & Technique :**
-    - **Tendance :** {"Haussière" if prix > ma20 else "Baissière/Neutre"}.
-    - **Rentabilité :** {info.get('sector', 'N/A')} avec un rendement dividende de {info.get('dividendYield', 0)*100:.2f}%.
-    - **Sécurité :** Stop-loss conseillé à **{stop_loss:.2f} €**. Objectif de sortie à **{objectif:.2f} €**.
-    """
-    return verdict, couleur, synthèse, stop_loss
-
-# --- INTERFACE PRINCIPALE ---
-st.title("🏛️ Terminal PEA Expert : Décisionnel & Exécution")
+# --- INTERFACE ---
+st.title("🏛️ Terminal PEA : Analyse & Prévisions")
 
 with st.sidebar:
-    st.header("🔍 Recherche & Budget")
-    nom_saisi = st.text_input("Nom de l'entreprise", placeholder="Ex: LVMH, Total, Air Liquide...")
-    budget = st.number_input("Budget d'investissement (€)", min_value=50, value=1000, step=50)
+    nom_saisi = st.text_input("Entreprise", value="LVMH")
+    budget = st.number_input("Budget (€)", min_value=50, value=1000)
     st.divider()
-    st.info("💡 Utilisez ce terminal pour valider vos ordres BoursoBank en 10 secondes.")
+    st.info("L'onglet 'Prévisions' utilise un modèle statistique pour projeter le cours à 30 jours.")
 
 if nom_saisi:
-    ticker, nom_propre = recherche_universelle(nom_saisi)
+    ticker = trouver_ticker(nom_saisi)
     if ticker:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="1y")
+        hist = stock.history(period="2y") # 2 ans pour plus de précision statistique
         
         if not hist.empty:
-            info = stock.info
             prix_actuel = float(hist['Close'].iloc[-1])
-            verdict, couleur, synthese, stop_loss = analyse_expert_ia(info, hist)
             
-            # --- ZONE DE DÉCISION ---
-            st.subheader(f"💎 Analyse Stratégique : {nom_propre}")
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                st.markdown(f"<h2 style='color:{couleur};'>{verdict}</h2>", unsafe_allow_html=True)
-                st.metric("Prix Direct", f"{prix_actuel:.2f} €")
-            with c2:
-                st.markdown(synthese)
+            # --- SYSTÈME D'ONGLETS ---
+            tab1, tab2, tab3 = st.tabs(["🎯 Analyse & Ordre", "📈 Prévisions (30j)", "📋 Journal"])
 
-            # --- CALCULATEUR D'ORDRE BOURSOBANK ---
-            st.subheader("📝 Préparation de l'ordre (BoursoBank)")
-            frais = calculer_frais(budget)
-            nb_actions = int((budget - frais) // prix_actuel)
-            total_reel = (nb_actions * prix_actuel) + frais
-            
-            df_ordre = pd.DataFrame({
-                "Paramètre d'exécution": ["Code ISIN", "Quantité à saisir", "Prix Limite conseillé", "Frais estimés", "Coût total réel"],
-                "Valeur": [info.get('isin', 'N/A'), nb_actions, f"{prix_actuel:.2f} €", f"{frais:.2f} €", f"{total_reel:.2f} €"]
-            })
-            st.table(df_ordre)
+            with tab1:
+                st.subheader(f"Analyse de {ticker}")
+                ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+                verdict = "ACHAT ✅" if prix_actuel > ma20 else "ATTENTE ⚠️"
+                
+                c1, c2 = st.columns(2)
+                c1.metric("Prix Direct", f"{prix_actuel:.2f} €")
+                c2.metric("Verdict IA", verdict)
+                
+                st.markdown("### 📝 Configuration BoursoBank")
+                nb_actions = int(budget // prix_actuel)
+                st.table(pd.DataFrame({
+                    "Paramètre": ["ISIN", "Quantité", "Prix Limite"],
+                    "Valeur": [stock.info.get('isin', ticker), nb_actions, f"{prix_actuel:.2f} €"]
+                }))
+                
+                if st.button("➕ Ajouter au journal"):
+                    st.session_state.portefeuille.append({"Valeur": ticker, "Prix": prix_actuel, "Verdict": verdict})
 
-            if st.button("📈 Enregistrer dans le journal de bord"):
-                st.session_state.portefeuille.append({
-                    "Date": pd.Timestamp.now().strftime("%d/%m/%Y"),
-                    "Entreprise": nom_propre,
-                    "ISIN": info.get('isin', 'N/A'),
-                    "Secteur": info.get('sector', 'N/A'),
-                    "Quantité": nb_actions,
-                    "PRU": round(prix_actuel, 2),
-                    "Stop-Loss": f"{stop_loss:.2f}€"
-                })
-                st.success("Trade mémorisé !")
+            with tab2:
+                st.subheader("🔮 Projection Statistique à 30 jours")
+                
+                # --- MODÈLE DE PRÉDICTION ---
+                df_pred = hist[['Close']].reset_index()
+                df_pred['Ordinal'] = pd.to_datetime(df_pred['Date']).apply(lambda x: x.toordinal())
+                
+                # Entraînement sur les 6 derniers mois pour la tendance récente
+                X = df_pred['Ordinal'].values[-120:].reshape(-1, 1)
+                y = df_pred['Close'].values[-120:]
+                model = LinearRegression().fit(X, y)
+                
+                # Génération des 30 prochains jours
+                futur_ordinals = np.array([df_pred['Ordinal'].max() + i for i in range(1, 31)]).reshape(-1, 1)
+                predictions = model.predict(futur_ordinals)
+                dates_futures = pd.date_range(start=hist.index[-1], periods=31)[1:]
+                
+                # Graphique prédictif
+                fig = go.Figure()
+                # Historique
+                fig.add_trace(go.Scatter(x=hist.index[-60:], y=hist['Close'][-60:], name="Historique (2 mois)", line=dict(color="#00D4FF")))
+                # Prévision
+                fig.add_trace(go.Scatter(x=dates_futures, y=predictions, name="Projection (30 jours)", line=dict(color="#FFA500", dash='dash')))
+                
+                fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=0,b=0))
+                st.plotly_chart(fig, use_container_width=True)
+                
+                diff_prev = ((predictions[-1] - prix_actuel) / prix_actuel) * 100
+                st.write(f"**Estimation :** Le modèle prévoit une variation potentielle de **{diff_prev:+.2f}%** d'ici un mois.")
+                st.caption("Note : Cette projection est basée sur la tendance linéaire récente. Elle ne prend pas en compte les actualités soudaines.")
 
-            # Graphique interactif
-            st.plotly_chart(go.Figure(go.Scatter(x=hist.index, y=hist['Close'], line=dict(color="#00D4FF"))).update_layout(height=300, template="plotly_dark", margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
-    else:
-        st.error("Entreprise introuvable. Soyez plus spécifique.")
-
-st.divider()
-
-# --- DASHBOARD DE SUIVI & EXPORT ---
-st.subheader("📋 Dashboard de Session & Diversification")
-if st.session_state.portefeuille:
-    df_recap = pd.DataFrame(st.session_state.portefeuille)
-    
-    col_tab, col_pie = st.columns([2, 1])
-    with col_tab:
-        st.dataframe(df_recap, use_container_width=True)
-    with col_pie:
-        fig_pie = go.Figure(data=[go.Pie(labels=df_recap['Secteur'], hole=.3)])
-        fig_pie.update_layout(title="Répartition Sectorielle", height=300, template="plotly_dark", showlegend=False)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    # Export spécial Notion
-    md_table = df_recap.to_markdown(index=False)
-    export_notion = f"# 📘 Journal de Trading PEA\n\n{md_table}\n\n*Analyse générée le {pd.Timestamp.now().strftime('%d/%m/%Y')}*"
-    
-    st.download_button("📥 Exporter vers Notion (.md)", data=export_notion, file_name="pea_notion_export.md")
-else:
-    st.info("Aucun trade dans le journal pour le moment.")
+            with tab3:
+                if st.session_state.portefeuille:
+                    st.table(pd.DataFrame(st.session_state.portefeuille))
+                else:
+                    st.write("Journal vide.")
