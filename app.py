@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 import requests
 
-st.set_page_config(page_title="Terminal PEA Prédictif", layout="wide")
+st.set_page_config(page_title="Terminal PEA Pro", layout="wide")
 
-# --- INITIALISATION & RECHERCHE ---
+# --- INITIALISATION ---
 if 'portefeuille' not in st.session_state:
     st.session_state.portefeuille = []
 
@@ -24,75 +24,56 @@ def trouver_ticker(nom):
 st.title("🏛️ Terminal PEA : Analyse & Prévisions")
 
 with st.sidebar:
-    nom_saisi = st.text_input("Entreprise", value="LVMH")
-    budget = st.number_input("Budget (€)", min_value=50, value=1000)
-    st.divider()
-    st.info("L'onglet 'Prévisions' utilise un modèle statistique pour projeter le cours à 30 jours.")
+    nom_saisi = st.sidebar.text_input("Entreprise", value="Air Liquide")
+    budget = st.sidebar.number_input("Budget (€)", min_value=50, value=1000)
 
 if nom_saisi:
     ticker = trouver_ticker(nom_saisi)
     if ticker:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="2y") # 2 ans pour plus de précision statistique
+        hist = stock.history(period="1y")
         
         if not hist.empty:
-            prix_actuel = float(hist['Close'].iloc[-1])
-            
-            # --- SYSTÈME D'ONGLETS ---
-            tab1, tab2, tab3 = st.tabs(["🎯 Analyse & Ordre", "📈 Prévisions (30j)", "📋 Journal"])
+            tab1, tab2 = st.tabs(["🎯 Analyse & Ordre", "🔮 Prévisions à 30j"])
 
             with tab1:
-                st.subheader(f"Analyse de {ticker}")
-                ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-                verdict = "ACHAT ✅" if prix_actuel > ma20 else "ATTENTE ⚠️"
+                prix_actuel = float(hist['Close'].iloc[-1])
+                st.metric("Prix Actuel", f"{prix_actuel:.2f} €")
                 
-                c1, c2 = st.columns(2)
-                c1.metric("Prix Direct", f"{prix_actuel:.2f} €")
-                c2.metric("Verdict IA", verdict)
-                
-                st.markdown("### 📝 Configuration BoursoBank")
+                st.subheader("📝 Ordre BoursoBank")
                 nb_actions = int(budget // prix_actuel)
                 st.table(pd.DataFrame({
-                    "Paramètre": ["ISIN", "Quantité", "Prix Limite"],
-                    "Valeur": [stock.info.get('isin', ticker), nb_actions, f"{prix_actuel:.2f} €"]
+                    "ISIN/Ticker": [ticker],
+                    "Quantité": [nb_actions],
+                    "Prix Limite": [f"{prix_actuel:.2f} €"]
                 }))
-                
-                if st.button("➕ Ajouter au journal"):
-                    st.session_state.portefeuille.append({"Valeur": ticker, "Prix": prix_actuel, "Verdict": verdict})
 
             with tab2:
-                st.subheader("🔮 Projection Statistique à 30 jours")
-                
-                # --- MODÈLE DE PRÉDICTION ---
-                df_pred = hist[['Close']].reset_index()
-                df_pred['Ordinal'] = pd.to_datetime(df_pred['Date']).apply(lambda x: x.toordinal())
-                
-                # Entraînement sur les 6 derniers mois pour la tendance récente
-                X = df_pred['Ordinal'].values[-120:].reshape(-1, 1)
-                y = df_pred['Close'].values[-120:]
-                model = LinearRegression().fit(X, y)
-                
-                # Génération des 30 prochains jours
-                futur_ordinals = np.array([df_pred['Ordinal'].max() + i for i in range(1, 31)]).reshape(-1, 1)
-                predictions = model.predict(futur_ordinals)
-                dates_futures = pd.date_range(start=hist.index[-1], periods=31)[1:]
-                
-                # Graphique prédictif
-                fig = go.Figure()
-                # Historique
-                fig.add_trace(go.Scatter(x=hist.index[-60:], y=hist['Close'][-60:], name="Historique (2 mois)", line=dict(color="#00D4FF")))
-                # Prévision
-                fig.add_trace(go.Scatter(x=dates_futures, y=predictions, name="Projection (30 jours)", line=dict(color="#FFA500", dash='dash')))
-                
-                fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,t=0,b=0))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                diff_prev = ((predictions[-1] - prix_actuel) / prix_actuel) * 100
-                st.write(f"**Estimation :** Le modèle prévoit une variation potentielle de **{diff_prev:+.2f}%** d'ici un mois.")
-                st.caption("Note : Cette projection est basée sur la tendance linéaire récente. Elle ne prend pas en compte les actualités soudaines.")
+                try:
+                    # Préparation des données
+                    df = hist[['Close']].reset_index()
+                    df['n'] = range(len(df))
+                    
+                    # Modèle simple
+                    X = df[['n']].values[-100:] # On s'appuie sur les 100 derniers jours
+                    y = df['Close'].values[-100:]
+                    model = LinearRegression().fit(X, y)
+                    
+                    # Projection
+                    futur = np.array(range(len(df), len(df) + 30)).reshape(-1, 1)
+                    prev = model.predict(futur)
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(y=y, name="Historique récent", line=dict(color="#00D4FF")))
+                    fig.add_trace(go.Scatter(x=list(range(100, 130)), y=prev, name="Projection", line=dict(color="orange", dash="dash")))
+                    fig.update_layout(template="plotly_dark", height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    diff = ((prev[-1] - prix_actuel) / prix_actuel) * 100
+                    st.write(f"**Tendance estimée :** {diff:+.2f}% d'ici 30 jours.")
+                except:
+                    st.warning("Calcul de prévision indisponible pour ce titre.")
 
-            with tab3:
-                if st.session_state.portefeuille:
-                    st.table(pd.DataFrame(st.session_state.portefeuille))
-                else:
-                    st.write("Journal vide.")
+# --- DIVERS DE SÉCURITÉ ---
+if st.button("🗑️ Vider la session"):
+    st.session_state.portefeuille = []; st.rerun()
