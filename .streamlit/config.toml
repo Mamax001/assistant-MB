@@ -1,0 +1,3 @@
+```toml
+[server]
+maxUploadSize = 1000
