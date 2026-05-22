@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import tempfile
 import os
+import time
 from google import genai
 
 # --- CONFIGURATION DE LA PAGE ---
@@ -24,22 +25,36 @@ tab1, tab2, tab3 = st.tabs(["1. Urbanisme (PLU)", "2. Risques Naturels", "3. Bil
 with tab1:
     st.header("Analyse de PLU avec Gemini")
     
-    # L'option accept_multiple_files=True est indispensable ici
     fichiers_pdf = st.file_uploader("Téléverse un ou plusieurs fichiers PLU (PDF)", type="pdf", accept_multiple_files=True)
     
     if st.button("Analyser les documents") and fichiers_pdf:
         client = genai.Client(api_key=api_key_gemini)
         
         for fichier_pdf in fichiers_pdf:
-            st.subheader(f"📄 Analyse de : {fichier_pdf.name}")
+            st.subheader(f"📄 Traitement de : {fichier_pdf.name}")
             
-            with st.spinner(f"Lecture et analyse de {fichier_pdf.name} en cours..."):
+            with st.spinner(f"Téléversement et traitement de {fichier_pdf.name} par Google..."):
+                # Écrit le fichier en temporaire sans caractères étranges dans le nom
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(fichier_pdf.getvalue())
                     tmp_path = tmp_file.name
 
                 try:
+                    # 1. Téléversement vers l'API Gemini Files
                     fichier_upload = client.files.upload(file=tmp_path, config={'mime_type': 'application/pdf'})
+                    
+                    # 2. Boucle de vérification du statut du fichier (Crucial pour les gros fichiers)
+                    statut = client.files.get(name=fichier_upload.name)
+                    while statut.state.name == "PROCESSING":
+                        time.sleep(2)  # Attend 2 secondes avant de revérifier
+                        statut = client.files.get(name=fichier_upload.name)
+                    
+                    if statut.state.name == "FAILED":
+                        st.error(f"Le traitement du fichier {fichier_pdf.name} a échoué sur les serveurs de Google.")
+                        continue
+                        
+                    # 3. Lancement de l'analyse une fois que le statut est 'ACTIVE'
+                    st.info(f"Analyse de l'urbanisme en cours pour {fichier_pdf.name}...")
                     
                     prompt = """
                     Agis comme un expert en urbanisme. Analyse ce document (PLU) et réponds avec précision :
@@ -54,15 +69,20 @@ with tab1:
                         model="gemini-2.5-flash",
                         contents=[fichier_upload, prompt]
                     )
+                    
                     st.success(f"Analyse de {fichier_pdf.name} terminée")
                     st.write(reponse.text)
                     st.divider()
                     
+                    # Nettoyage sur les serveurs Google
                     client.files.delete(name=fichier_upload.name)
+                    
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse de {fichier_pdf.name} : {e}")
                 finally:
-                    os.remove(tmp_path)
+                    # Nettoyage du fichier temporaire local
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
 
 # --- MODULE 2 : RISQUES ---
 with tab2:
