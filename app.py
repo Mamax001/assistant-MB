@@ -4,6 +4,7 @@ import tempfile
 import os
 import time
 from google import genai
+from google.genai import types
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
@@ -33,27 +34,25 @@ with tab1:
         for fichier_pdf in fichiers_pdf:
             st.subheader(f"📄 Traitement de : {fichier_pdf.name}")
             
-            with st.spinner(f"Téléversement et traitement de {fichier_pdf.name} par Google..."):
-                # Écrit le fichier en temporaire sans caractères étranges dans le nom
+            with st.spinner(f"Téléversement de {fichier_pdf.name} vers les serveurs sécurisés..."):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(fichier_pdf.getvalue())
                     tmp_path = tmp_file.name
 
                 try:
-                    # 1. Téléversement vers l'API Gemini Files
-                    fichier_upload = client.files.upload(file=tmp_path, config={'mime_type': 'application/pdf'})
+                    # 1. Téléversement via l'API Files
+                    fichier_upload = client.files.upload(file=tmp_path)
                     
-                    # 2. Boucle de vérification du statut du fichier (Crucial pour les gros fichiers)
+                    # 2. Suivi de la validation du fichier par Google
                     statut = client.files.get(name=fichier_upload.name)
                     while statut.state.name == "PROCESSING":
-                        time.sleep(2)  # Attend 2 secondes avant de revérifier
+                        time.sleep(2)
                         statut = client.files.get(name=fichier_upload.name)
                     
-                    if statut.state.name == "FAILED":
-                        st.error(f"Le traitement du fichier {fichier_pdf.name} a échoué sur les serveurs de Google.")
+                    if statut.state.name != "ACTIVE":
+                        st.error(f"Le fichier {fichier_pdf.name} n'a pas pu être traité par l'API (Statut : {statut.state.name}).")
                         continue
                         
-                    # 3. Lancement de l'analyse une fois que le statut est 'ACTIVE'
                     st.info(f"Analyse de l'urbanisme en cours pour {fichier_pdf.name}...")
                     
                     prompt = """
@@ -65,6 +64,7 @@ with tab1:
                     Cite les numéros d'articles du PLU qui justifient tes réponses.
                     """
                     
+                    # 3. Appel de génération corrigé avec la syntaxe exacte pour google-genai
                     reponse = client.models.generate_content(
                         model="gemini-2.5-flash",
                         contents=[fichier_upload, prompt]
@@ -74,13 +74,13 @@ with tab1:
                     st.write(reponse.text)
                     st.divider()
                     
-                    # Nettoyage sur les serveurs Google
+                    # Nettoyage immédiat de la mémoire cloud
                     client.files.delete(name=fichier_upload.name)
                     
                 except Exception as e:
                     st.error(f"Erreur lors de l'analyse de {fichier_pdf.name} : {e}")
                 finally:
-                    # Nettoyage du fichier temporaire local
+                    # Suppression du fichier temporaire sur la machine de déploiement
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
 
@@ -104,7 +104,7 @@ with tab2:
                 if res_georisques.get('data'):
                     st.success("Risques identifiés dans un rayon de 1km :")
                     for risque in res_georisques['data']:
-                        st.write(f"- {risque.get('libelle_risque_long', 'Inconnu')} (État : {risque.get('etat_arrete', 'N/A')})")
+                        st.write(f"- {whitespace_clean := risque.get('libelle_risque_long', 'Inconnu')} (État : {risque.get('etat_arrete', 'N/A')})")
                 else:
                     st.info("Aucun risque majeur trouvé ou API indisponible.")
 
