@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
+import tempfile
 import os
+import time
 from google import genai
-from google.genai import types
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
@@ -18,46 +19,67 @@ except KeyError as e:
     st.stop()
 
 # --- ONGLETS ---
-tab1, tab2, tab3 = st.tabs(["1. Urbanisme (Lien PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
+tab1, tab2, tab3 = st.tabs(["1. Urbanisme (PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
 
-# --- MODULE 1 : ANALYSE PLU VIA LIEN WEB ---
+# --- MODULE 1 : ANALYSE PLU MULTI-FICHIERS ---
 with tab1:
-    st.header("Analyse de PLU via Lien Internet")
-    st.write("Colle ci-dessous l'URL de la page web ou du document en ligne contenant le PLU à analyser.")
+    st.header("Analyse de PLU avec Gemini")
     
-    url_plu = st.text_input("URL du document ou de la page du PLU (ex: https://mairie...)", placeholder="https://...")
+    # Correction : accept_multiple_files est bien activé ici
+    fichiers_pdf = st.file_uploader("Téléverse un ou plusieurs fichiers PLU (PDF)", type="pdf", accept_multiple_files=True)
     
-    if st.button("Analyser le lien") and url_plu:
+    if st.button("Analyser les documents") and fichiers_pdf:
         client = genai.Client(api_key=api_key_gemini)
         
-        with st.spinner("Gemini explore, navigue et analyse le lien fourni..."):
-            try:
-                prompt = f"""
-                Agis comme un expert en urbanisme. Analyse avec précision les règles d'urbanisme applicables en visitant ce lien internet : {url_plu}
-                Réponds ensuite de manière détaillée à ces questions :
-                1. Quelle est l'emprise au sol maximale (CES) autorisée ?
-                2. Quelle est la hauteur maximale autorisée au faîtage ?
-                3. Est-il possible de surélever un bâtiment existant ?
-                4. Combien de places de stationnement sont exigées pour créer un logement ?
-                Cite scrupuleusement les numéros d'articles ou les sections du PLU qui justifient tes réponses.
-                """
-                
-                # Correction majeure : Activation obligatoire de Google Search pour permettre la lecture d'URL externes
-                reponse = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())]
-                    )
-                )
-                
-                st.success("Analyse du lien terminée avec succès")
-                st.write(reponse.text)
-                
-            except Exception as e:
-                st.error(f"Erreur lors de l'analyse du lien : {e}")
+        for fichier_pdf in fichiers_pdf:
+            st.subheader(f"📄 Analyse de : {fichier_pdf.name}")
+            
+            with st.spinner(f"Lecture de {fichier_pdf.name}..."):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(fichier_pdf.getvalue())
+                    tmp_path = tmp_file.name
 
-# --- MODULE 2 : RISQUES ---
+                try:
+                    # Téléversement brut
+                    fichier_upload = client.files.upload(file=tmp_path)
+                    
+                    # Sécurité : On attend activement que Google ait fini de traiter le gros fichier
+                    statut = client.files.get(name=fichier_upload.name)
+                    while statut.state.name == "PROCESSING":
+                        time.sleep(2)
+                        statut = client.files.get(name=fichier_upload.name)
+                    
+                    if statut.state.name != "ACTIVE":
+                        st.error(f"Le fichier {fichier_pdf.name} n'a pas pu être traité.")
+                        continue
+                    
+                    prompt = """
+                    Agis comme un expert en urbanisme. Analyse ce document (PLU) et réponds avec précision :
+                    1. Quelle est l'emprise au sol maximale (CES) autorisée ?
+                    2. Quelle est la hauteur maximale autorisée au faîtage ?
+                    3. Est-il possible de surélever un bâtiment existant ?
+                    4. Combien de places de stationnement sont exigées pour créer un logement ?
+                    Cite les numéros d'articles du PLU qui justifient tes réponses.
+                    """
+                    
+                    # Appel corrigé pour la nouvelle API
+                    reponse = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[fichier_upload, prompt]
+                    )
+                    
+                    st.success(f"Analyse de {fichier_pdf.name} terminée")
+                    st.write(reponse.text)
+                    st.divider()
+                    
+                    client.files.delete(name=fichier_upload.name)
+                except Exception as e:
+                    st.error(f"Erreur lors de l'analyse : {e}")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+# --- MODULE 2 : RISQUES (CORRIGÉ) ---
 with tab2:
     st.header("Vérification des Risques Naturels")
     adresse = st.text_input("Saisis l'adresse exacte du projet")
@@ -78,13 +100,14 @@ with tab2:
                     if res_georisques.get('data'):
                         st.success("Risques identifiés dans un rayon de 1km :")
                         for risque in res_georisques['data']:
+                            # Correction du bug d'affichage ici
                             libelle = risque.get('libelle_risque_long', 'Inconnu')
                             etat = risque.get('etat_arrete', 'N/A')
-                            st.write(f"- {libelle} (État : {制造 := etat})")
+                            st.write(f"- {libelle} (État : {etat})")
                     else:
                         st.info("Aucun risque majeur trouvé ou API indisponible.")
             except Exception as e:
-                st.error(f"Erreur de connexion aux API d'État : {e}")
+                st.error(f"Erreur avec l'API Géorisques : {e}")
 
 # --- MODULE 3 : BILAN & SAUVEGARDE NOTION ---
 with tab3:
@@ -100,7 +123,6 @@ with tab3:
         frais_notaire_pct = st.number_input("Frais de notaire (%)", value=2.5)
         tva_marge_pct = st.number_input("TVA sur marge (%)", value=20.0)
 
-    # Calculs financiers automatisés
     frais_notaire = prix_achat * (frais_notaire_pct / 100)
     prix_revient = prix_achat + frais_notaire + cout_travaux
     marge_brute = prix_revente - prix_revient
@@ -133,11 +155,8 @@ with tab3:
         }
         
         with st.spinner("Envoi des données vers Notion..."):
-            try:
-                reponse = requests.post(url, headers=headers, json=data)
-                if reponse.status_code == 200:
-                    st.success("✅ Données sauvegardées de manière permanente dans ton tableau Notion !")
-                else:
-                    st.error(f"Erreur lors de la liaison avec Notion : {reponse.text}")
-            except Exception as e:
-                st.error(f"Impossible de joindre l'API Notion : {e}")
+            reponse = requests.post(url, headers=headers, json=data)
+            if reponse.status_code == 200:
+                st.success("✅ Données sauvegardées de manière permanente dans ton tableau Notion !")
+            else:
+                st.error(f"Erreur lors de la liaison avec Notion : {reponse.text}")
