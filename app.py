@@ -1,79 +1,135 @@
 import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from sklearn.linear_model import LinearRegression
+import requests
+import tempfile
+import os
+from google import genai
 
-st.set_page_config(page_title="Terminal PEA Pro", layout="wide")
+# --- CONFIGURATION DE LA PAGE ---
+st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
+st.title("🏗️ Assistant Marchand de Biens")
 
-# --- STYLE ET CONFIG ---
-st.markdown("""<style> .main { background-color: #0e1117; } </style>""", unsafe_allow_html=True)
+# --- RÉCUPÉRATION SÉCURISÉE DES CLÉS (STREAMLIT SECRETS) ---
+try:
+    api_key_gemini = st.secrets["GEMINI_API_KEY"]
+    notion_token = st.secrets["NOTION_TOKEN"]
+    database_id = st.secrets["NOTION_DATABASE_ID"]
+except KeyError as e:
+    st.error(f"Erreur : La clé {e} est manquante dans les Secrets de Streamlit.")
+    st.stop()
 
-with st.sidebar:
-    st.header("🏛️ Paramètres d'Achat")
-    ticker_input = st.text_input("Ticker (ex: CS.PA, AI.PA)", value="CS.PA").upper()
-    prix_achat = st.number_input("Mon Prix d'Achat (€)", min_value=0.0, value=39.24, step=0.01)
-    date_achat = st.date_input("Date d'Achat")
-    budget = st.number_input("Budget Total (€)", min_value=10, value=1000)
-    lancer = st.button("🚀 Calculer Rentabilité")
+# --- ONGLETS ---
+tab1, tab2, tab3 = st.tabs(["1. Urbanisme (PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
 
-st.title("📈 Suivi de Rentabilité & Prévisions")
+# --- MODULE 1 : ANALYSE PLU ---
+with tab1:
+    st.header("Analyse de PLU avec Gemini")
+    fichier_pdf = st.file_uploader("Téléverse le PLU (PDF)", type="pdf")
+    
+    if st.button("Analyser le document") and fichier_pdf:
+        client = genai.Client(api_key=api_key_gemini)
+        with st.spinner("Lecture et analyse du PLU en cours..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(fichier_pdf.getvalue())
+                tmp_path = tmp_file.name
 
-if lancer:
-    with st.spinner('Analyse en cours...'):
-        stock = yf.Ticker(ticker_input)
-        hist = stock.history(period="1y")
-
-        if not hist.empty:
-            prix_actuel = float(hist['Close'].iloc[-1])
-            
-            tab1, tab2, tab3 = st.tabs(["📊 Performance Réelle", "🔮 Prévisions", "📝 Ordre Bourso"])
-
-            with tab1:
-                # --- CALCULS DE RENTABILITÉ ---
-                performance = ((prix_actuel - prix_achat) / prix_achat) * 100
-                frais_estimes = 1.99 if budget < 500 else budget * 0.005
-                point_mort = prix_achat + (frais_estimes / (budget / prix_achat))
+            try:
+                fichier_upload = client.files.upload(file=tmp_path, config={'mime_type': 'application/pdf'})
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Prix Actuel", f"{prix_actuel:.2f} €", f"{performance:.2f} %")
-                c2.metric("Point Mort (Break-even)", f"{point_mort:.2f} €")
-                c3.metric("Frais Bourso Est.", f"{frais_estimes:.2f} €")
+                prompt = """
+                Agis comme un expert en urbanisme. Analyse ce document (PLU) et réponds avec précision :
+                1. Quelle est l'emprise au sol maximale (CES) autorisée ?
+                2. Quelle est la hauteur maximale autorisée au faîtage ?
+                3. Est-il possible de surélever un bâtiment existant ?
+                4. Combien de places de stationnement sont exigées pour créer un logement ?
+                Cite les numéros d'articles du PLU qui justifient tes réponses.
+                """
+                
+                reponse = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[fichier_upload, prompt]
+                )
+                st.success("Analyse terminée")
+                st.write(reponse.text)
+                client.files.delete(name=fichier_upload.name)
+            except Exception as e:
+                st.error(f"Erreur lors de l'analyse : {e}")
+            finally:
+                os.remove(tmp_path)
 
-                # Indicateur visuel
-                if prix_actuel >= point_mort:
-                    st.success(f"✅ Tu es RENTABLE. Gain net estimé : {((prix_actuel - point_mort) * (budget/prix_achat)):.2f} €")
+# --- MODULE 2 : RISQUES ---
+with tab2:
+    st.header("Vérification des Risques Naturels")
+    adresse = st.text_input("Saisis l'adresse exacte du projet")
+    
+    if st.button("Vérifier les risques") and adresse:
+        with st.spinner("Recherche des données géographiques..."):
+            res_adresse = requests.get(f"https://api-adresse.data.gouv.fr/search/?q={adresse}&limit=1").json()
+            if not res_adresse.get('features'):
+                st.error("Adresse introuvable.")
+            else:
+                lon, lat = res_adresse['features']['geometry']['coordinates']
+                st.write(f"**Coordonnées GPS :** {lat}, {lon}")
+                
+                url_georisques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
+                res_georisques = requests.get(url_georisques).json()
+                
+                if res_georisques.get('data'):
+                    st.success("Risques identifiés dans un rayon de 1km :")
+                    for risque in res_georisques['data']:
+                        st.write(f"- {risque.get('libelle_risque_long', 'Inconnu')} (État : {risque.get('etat_arrete', 'N/A')})")
                 else:
-                    st.warning(f"⚠️ Tu es en perte de {((point_mort - prix_actuel) * (budget/prix_achat)):.2f} € (Frais inclus)")
+                    st.info("Aucun risque majeur trouvé ou API indisponible.")
 
-                # --- STRATÉGIE DE SORTIE ---
-                st.subheader("🎯 Objectifs de Sortie")
-                col_s1, col_s2, col_s3 = st.columns(3)
-                col_s1.write(f"**Sécurité (Stop-Loss -5%)** : {prix_achat * 0.95:.2f} €")
-                col_s2.write(f"**Objectif 1 (+10%)** : {prix_achat * 1.10:.2f} €")
-                col_s3.write(f"**Objectif 2 (+20%)** : {prix_achat * 1.20:.2f} €")
+# --- MODULE 3 : BILAN & SAUVEGARDE NOTION ---
+with tab3:
+    st.header("Simulateur MDB et Sauvegarde")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        nom_projet = st.text_input("Nom du projet", value="Projet Pro")
+        prix_achat = st.number_input("Prix d'achat net vendeur (€)", value=100000)
+        cout_travaux = st.number_input("Travaux estimés (€)", value=30000)
+    with col2:
+        prix_revente = st.number_input("Prix de revente estimé (€)", value=180000)
+        frais_notaire_pct = st.number_input("Frais de notaire (%)", value=2.5)
+        tva_marge_pct = st.number_input("TVA sur marge (%)", value=20.0)
 
-            with tab2:
-                # --- TON TRUC (PRÉVISIONS) ---
-                df = hist[['Close']].reset_index()
-                df['n'] = range(len(df))
-                X = df[['n']].values[-100:]; y = df['Close'].values[-100:]
-                model = LinearRegression().fit(X, y)
-                futur = np.array(range(len(df), len(df) + 30)).reshape(-1, 1)
-                preds = model.predict(futur)
-                
-                fig_pred = go.Figure()
-                fig_pred.add_trace(go.Scatter(y=y, name="Récent", line=dict(color="#00D4FF")))
-                fig_pred.add_trace(go.Scatter(x=list(range(100, 130)), y=preds, name="Projection", line=dict(color="orange", dash="dash")))
-                fig_pred.update_layout(template="plotly_dark", height=350)
-                st.plotly_chart(fig_pred, use_container_width=True)
-                
-                diff = ((preds[-1] - prix_actuel) / prix_actuel) * 100
-                st.write(f"**Tendance estimée à 30 jours :** {diff:+.2f}%")
+    # Calculs financiers fondamentaux
+    frais_notaire = prix_achat * (frais_notaire_pct / 100)
+    prix_revient = prix_achat + frais_notaire + cout_travaux
+    marge_brute = prix_revente - prix_revient
+    tva_marge = marge_brute * (tva_marge_pct / (100 + tva_marge_pct)) if marge_brute > 0 else 0
+    marge_nette = marge_brute - tva_marge
+    rentabilite = (marge_nette / prix_revient) * 100 if prix_revient > 0 else 0
 
-            with tab3:
-                st.info(f"Pour sortir rentable (frais inclus), tu dois revendre au-dessus de **{point_mort:.2f} €**.")
-                st.write(f"Date d'achat enregistrée : {date_achat}")
-        else:
-            st.error("Ticker introuvable.")
+    st.subheader("Synthèse Financière")
+    st.write(f"**Prix de revient global :** {prix_revient:,.0f} €")
+    st.write(f"**Marge Nette après TVA :** {marge_nette:,.0f} €")
+    st.write(f"**Rentabilité brute sur l'opération :** {rentabilite:.2f} %")
+
+    st.divider()
+
+    # Bouton de sauvegarde directe dans Notion
+    if st.button("Enregistrer définitivement dans Notion"):
+        url = "https://api.notion.com/v1/pages"
+        headers = {
+            "Authorization": f"Bearer {notion_token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        }
+        data = {
+            "parent": {"database_id": database_id},
+            "properties": {
+                "Nom": {"title": [{"text": {"content": nom_projet}}]},
+                "Prix d'achat": {"number": prix_achat},
+                "Marge Nette": {"number": float(marge_nette)},
+                "Rentabilité": {"number": float(rentabilite)}
+            }
+        }
+        
+        with st.spinner("Envoi des données vers Notion..."):
+            reponse = requests.post(url, headers=headers, json=data)
+            if reponse.status_code == 200:
+                st.success("✅ Données sauvegardées de manière permanente dans ton tableau Notion !")
+            else:
+                st.error(f"Erreur lors de la liaison avec Notion : {reponse.text}")
