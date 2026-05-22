@@ -1,10 +1,7 @@
 import streamlit as st
 import requests
-import tempfile
 import os
-import time
 from google import genai
-from google.genai import types
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
@@ -20,69 +17,41 @@ except KeyError as e:
     st.stop()
 
 # --- ONGLETS ---
-tab1, tab2, tab3 = st.tabs(["1. Urbanisme (PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
+tab1, tab2, tab3 = st.tabs(["1. Urbanisme (Lien PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
 
-# --- MODULE 1 : ANALYSE PLU ---
+# --- MODULE 1 : ANALYSE PLU VIA LIEN WEB ---
 with tab1:
-    st.header("Analyse de PLU avec Gemini")
+    st.header("Analyse de PLU via Lien Internet")
+    st.write("Colle ci-dessous l'URL de la page web ou du document en ligne contenant le PLU à analyser.")
     
-    fichiers_pdf = st.file_uploader("Téléverse un ou plusieurs fichiers PLU (PDF)", type="pdf", accept_multiple_files=True)
+    url_plu = st.text_input("URL du document ou de la page du PLU (ex: https://mairie...)", placeholder="https://...")
     
-    if st.button("Analyser les documents") and fichiers_pdf:
+    if st.button("Analyser le lien") and url_plu:
         client = genai.Client(api_key=api_key_gemini)
         
-        for fichier_pdf in fichiers_pdf:
-            st.subheader(f"📄 Traitement de : {fichier_pdf.name}")
-            
-            with st.spinner(f"Téléversement de {fichier_pdf.name} vers les serveurs sécurisés..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                    tmp_file.write(fichier_pdf.getvalue())
-                    tmp_path = tmp_file.name
-
-                try:
-                    # 1. Téléversement via l'API Files
-                    fichier_upload = client.files.upload(file=tmp_path)
-                    
-                    # 2. Suivi de la validation du fichier par Google
-                    statut = client.files.get(name=fichier_upload.name)
-                    while statut.state.name == "PROCESSING":
-                        time.sleep(2)
-                        statut = client.files.get(name=fichier_upload.name)
-                    
-                    if statut.state.name != "ACTIVE":
-                        st.error(f"Le fichier {fichier_pdf.name} n'a pas pu être traité par l'API (Statut : {statut.state.name}).")
-                        continue
-                        
-                    st.info(f"Analyse de l'urbanisme en cours pour {fichier_pdf.name}...")
-                    
-                    prompt = """
-                    Agis comme un expert en urbanisme. Analyse ce document (PLU) et réponds avec précision :
-                    1. Quelle est l'emprise au sol maximale (CES) autorisée ?
-                    2. Quelle est la hauteur maximale autorisée au faîtage ?
-                    3. Est-il possible de surélever un bâtiment existant ?
-                    4. Combien de places de stationnement sont exigées pour créer un logement ?
-                    Cite les numéros d'articles du PLU qui justifient tes réponses.
-                    """
-                    
-                    # 3. Appel de génération corrigé avec la syntaxe exacte pour google-genai
-                    reponse = client.models.generate_content(
-                        model="gemini-2.5-flash",
-                        contents=[fichier_upload, prompt]
-                    )
-                    
-                    st.success(f"Analyse de {fichier_pdf.name} terminée")
-                    st.write(reponse.text)
-                    st.divider()
-                    
-                    # Nettoyage immédiat de la mémoire cloud
-                    client.files.delete(name=fichier_upload.name)
-                    
-                except Exception as e:
-                    st.error(f"Erreur lors de l'analyse de {fichier_pdf.name} : {e}")
-                finally:
-                    # Suppression du fichier temporaire sur la machine de déploiement
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
+        with st.spinner("Gemini explore et analyse le lien fourni..."):
+            try:
+                prompt = f"""
+                Agis comme un expert en urbanisme. Analyse le contenu accessible via ce lien internet : {url_plu}
+                Réponds ensuite avec précision à ces questions :
+                1. Quelle est l'emprise au sol maximale (CES) autorisée ?
+                2. Quelle est la hauteur maximale autorisée au faîtage ?
+                3. Est-il possible de surélever un bâtiment existant ?
+                4. Combien de places de stationnement sont exigées pour créer un logement ?
+                Cite les numéros d'articles ou les sections du document qui justifient tes réponses.
+                """
+                
+                # Appel direct du modèle pour analyser l'URL
+                reponse = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt
+                )
+                
+                st.success("Analyse du lien terminée")
+                st.write(reponse.text)
+                
+            except Exception as e:
+                st.error(f"Erreur lors de l'analyse du lien : {e}")
 
 # --- MODULE 2 : RISQUES ---
 with tab2:
@@ -104,7 +73,7 @@ with tab2:
                 if res_georisques.get('data'):
                     st.success("Risques identifiés dans un rayon de 1km :")
                     for risque in res_georisques['data']:
-                        st.write(f"- {whitespace_clean := risque.get('libelle_risque_long', 'Inconnu')} (État : {risque.get('etat_arrete', 'N/A')})")
+                        st.write(f"- {risque.get('libelle_risque_long', 'Inconnu')} (État : {whitespace_clean := risque.get('etat_arrete', 'N/A')})")
                 else:
                     st.info("Aucun risque majeur trouvé ou API indisponible.")
 
