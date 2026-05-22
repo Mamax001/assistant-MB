@@ -1,102 +1,144 @@
 import streamlit as st
 import requests
-import tempfile
-import os
-import time
 from google import genai
+from google.genai import types
 
-st.set_page_config(page_title="Test Assistant", layout="wide")
-st.title("🏗️ Test de l'Assistant")
+# --- CONFIGURATION DE LA PAGE ---
+st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
+st.title("🏗️ Assistant Marchand de Biens")
 
-# Vérification brute des clés d'accès
+# --- RÉCUPÉRATION SÉCURISÉE DES CLÉS (STREAMLIT SECRETS) ---
 try:
     api_key_gemini = st.secrets["GEMINI_API_KEY"]
-except Exception as e:
-    st.error(f"Erreur de configuration des clés : {e}")
+    notion_token = st.secrets["NOTION_TOKEN"]
+    database_id = st.secrets["NOTION_DATABASE_ID"]
+except KeyError as e:
+    st.error(f"Erreur : La clé {e} est manquante dans les Secrets de Streamlit.")
     st.stop()
 
-tab1, tab2 = st.tabs(["1. Test Multi-PDF", "2. Test Adresse"])
+# --- ONGLETS ---
+tab1, tab2, tab3 = st.tabs(["1. Urbanisme (Lien PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
 
-# --- ONGLET 1 : MULTI-PDF ---
+# --- MODULE 1 : ANALYSE PLU VIA LIEN WEB ---
 with tab1:
-    st.header("Test d'envoi de documents multiples")
+    st.header("Analyse de PLU via Lien Internet")
+    st.write("Colle ci-dessous l'URL de la page web ou du document en ligne (PDF, texte) contenant le PLU à analyser.")
     
-    # Zone d'envoi configurée explicitement pour plusieurs fichiers
-    fichiers_pdf = st.file_uploader(
-        "Dépose plusieurs fichiers ici", 
-        type="pdf", 
-        accept_multiple_files=True,
-        key="test_uploader"
-    )
+    url_plu = st.text_input("URL du PLU (ex: https://mairie-urbanisme...)", placeholder="https://...")
     
-    if fichiers_pdf:
-        st.success(f"Nombre de fichiers détectés par l'interface : {len(fichiers_pdf)}")
-        for f in fichiers_pdf:
-            st.write(f"🟢 Fichier prêt : **{f.name}** ({f.size / 1024 / 1024:.2f} Mo)")
-            
-        if st.button("Lancer l'analyse de test"):
-            client = genai.Client(api_key=api_key_gemini)
-            
-            for fichier_pdf in fichiers_pdf:
-                with st.spinner(f"Envoi de {fichier_pdf.name} à Google..."):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                        tmp.write(fichier_pdf.getvalue())
-                        tmp_path = tmp.name
-                    
-                    try:
-                        # Envoi brut au serveur
-                        blob = client.files.upload(file=tmp_path)
-                        
-                        # Suivi de la validation
-                        statut = client.files.get(name=blob.name)
-                        while statut.state.name == "PROCESSING":
-                            time.sleep(2)
-                            statut = client.files.get(name=blob.name)
-                            
-                        if statut.state.name == "ACTIVE":
-                            st.info(f"Analyse IA pour : {fichier_pdf.name}")
-                            reponse = client.models.generate_content(
-                                model="gemini-2.5-flash",
-                                contents=[blob, "Fais un résumé de trois lignes de ce document."]
-                            )
-                            st.write(reponse.text)
-                        else:
-                            st.error(f"Le fichier a le statut : {statut.state.name}")
-                            
-                        client.files.delete(name=blob.name)
-                    except Exception as e:
-                        st.error(f"Erreur technique : {e}")
-                    finally:
-                        if os.path.exists(tmp_path):
-                            os.remove(tmp_path)
-
-# --- ONGLET 2 : ADRESSE ---
-with tab2:
-    st.header("Test du moteur d'adresse")
-    adresse_test = st.text_input("Entre une adresse (ex: 10 rue de la Paix Paris)")
-    
-    if st.button("Tester l'adresse") and adresse_test:
-        with st.spinner("Requête en cours..."):
+    if st.button("Analyser le lien") and url_plu:
+        client = genai.Client(api_key=api_key_gemini)
+        
+        with st.spinner("Gemini explore et analyse le lien fourni..."):
             try:
-                # Étape 1 : Traduction de l'adresse en coordonnées GPS
-                url_adresse = f"https://api-adresse.data.gouv.fr/search/?q={adresse_test}&limit=1"
-                res_addr = requests.get(url_adresse).json()
+                prompt = f"""
+                Agis comme un expert en urbanisme. Navigue sur ce lien internet et analyse son contenu : {url_plu}
+                Réponds ensuite avec précision à ces questions :
+                1. Quelle est l'emprise au sol maximale (CES) autorisée ?
+                2. Quelle est la hauteur maximale autorisée au faîtage ?
+                3. Est-il possible de surélever un bâtiment existant ?
+                4. Combien de places de stationnement sont exigées pour créer un logement ?
+                Cite explicitement les numéros d'articles du PLU qui justifient tes réponses.
+                """
                 
-                if not res_addr.get('features'):
-                    st.error("L'API du gouvernement ne trouve pas cette adresse.")
-                else:
-                    lon, lat = res_addr['features'][0]['geometry']['coordinates']
-                    st.success(f"Adresse trouvée ! Coordonnées GPS : {lat}, {lon}")
-                    
-                    # Étape 2 : Appel à Géorisques
-                    url_risques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
-                    res_risq = requests.get(url_risques).json()
-                    
-                    if res_risq.get('data'):
-                        st.write("### Liste des risques trouvés :")
-                        for r in res_risq['data']:
-                            st.write(f"- {r.get('libelle_risque_long', 'Nom inconnu')}")
-                    else:
-                        st.warning("Aucun risque recensé ou format de réponse vide.")
+                # Utilisation de l'outil Google Search pour permettre à l'IA de visiter l'URL
+                reponse = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
+                )
+                
+                st.success("Analyse du lien terminée")
+                st.write(reponse.text)
+                
             except Exception as e:
-                st.error(f"Le système de recherche a planté : {e}")
+                st.error(f"Erreur lors de l'analyse du lien : {e}")
+
+# --- MODULE 2 : RISQUES NATURELS ---
+with tab2:
+    st.header("Vérification des Risques Naturels")
+    adresse = st.text_input("Saisis l'adresse exacte du projet (ex: 10 rue de la Paix Paris)")
+    
+    if st.button("Vérifier les risques") and adresse:
+        with st.spinner("Recherche des données géographiques..."):
+            try:
+                # 1. Appel de l'API Adresse du Gouvernement
+                res_adresse = requests.get(f"https://api-adresse.data.gouv.fr/search/?q={adresse}&limit=1").json()
+                if not res_adresse.get('features'):
+                    st.error("Adresse introuvable.")
+                else:
+                    lon, lat = res_adresse['features'][0]['geometry']['coordinates']
+                    st.write(f"**Coordonnées GPS :** {lat}, {lon}")
+                    
+                    # 2. Appel de l'API Géorisques officielle
+                    url_georisques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
+                    res_georisques = requests.get(url_georisques).json()
+                    
+                    if res_georisques.get('data'):
+                        st.success("Risques identifiés dans un rayon de 1km :")
+                        for risque in res_georisques['data']:
+                            libelle = risque.get('libelle_risque_long', 'Inconnu')
+                            etat = risque.get('etat_arrete', 'N/A')
+                            st.write(f"- {libelle} (État : {etat})")
+                    else:
+                        st.info("Aucun risque majeur trouvé ou API indisponible.")
+            except Exception as e:
+                st.error(f"Erreur de connexion aux API de risques : {e}")
+
+# --- MODULE 3 : BILAN & SAUVEGARDE NOTION ---
+with tab3:
+    st.header("Simulateur MDB et Sauvegarde")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        nom_projet = st.text_input("Nom du projet", value="Projet Pro")
+        prix_achat = st.number_input("Prix d'achat net vendeur (€)", value=100000)
+        cout_travaux = st.number_input("Travaux estimés (€)", value=30000)
+    with col2:
+        prix_revente = st.number_input("Prix de revente estimé (€)", value=180000)
+        frais_notaire_pct = st.number_input("Frais de notaire (%)", value=2.5)
+        tva_marge_pct = st.number_input("TVA sur marge (%)", value=20.0)
+
+    # Calculs financiers
+    frais_notaire = prix_achat * (frais_notaire_pct / 100)
+    prix_revient = prix_achat + frais_notaire + cout_travaux
+    marge_brute = prix_revente - prix_revient
+    tva_marge = marge_brute * (tva_marge_pct / (100 + tva_marge_pct)) if marge_brute > 0 else 0
+    marge_nette = marge_brute - tva_marge
+    rentabilite = (marge_nette / prix_revient) * 100 if prix_revient > 0 else 0
+
+    st.subheader("Synthèse Financière")
+    st.write(f"**Prix de revient global :** {prix_revient:,.0f} €")
+    st.write(f"**Marge Nette après TVA :** {marge_nette:,.0f} €")
+    st.write(f"**Rentabilité brute sur l'opération :** {rentabilite:.2f} %")
+
+    st.divider()
+
+    if st.button("Enregistrer définitivement dans Notion"):
+        url = "https://api.notion.com/v1/pages"
+        headers = {
+            "Authorization": f"Bearer {notion_token}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        }
+        data = {
+            "parent": {"database_id": database_id},
+            "properties": {
+                "Nom": {"title": [{"text": {"content": nom_projet}}]},
+                "Prix d'achat": {"number": prix_achat},
+                "Marge Nette": {"number": float(marge_nette)},
+                "Rentabilité": {"number": float(rentabilite)}
+            }
+        }
+        
+        with st.spinner("Envoi des données vers Notion..."):
+            try:
+                reponse = requests.post(url, headers=headers, json=data)
+                if reponse.status_code == 200:
+                    st.success("✅ Données sauvegardées dans ton tableau Notion !")
+                else:
+                    st.error(f"Erreur Notion : {reponse.text}")
+            except Exception as e:
+                st.error(f"Impossible de joindre Notion : {e}")
