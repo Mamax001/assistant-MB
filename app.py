@@ -17,31 +17,52 @@ except KeyError as e:
     st.stop()
 
 # --- ONGLETS ---
-tab1, tab2, tab3 = st.tabs(["1. Urbanisme (Lien PLU)", "2. Risques Naturels", "3. Bilan Financier & Notion"])
+tab1, tab2, tab3 = st.tabs(["1. Faisabilité du Projet", "2. Risques Naturels", "3. Bilan Financier & Notion"])
 
-# --- MODULE 1 : ANALYSE PLU VIA LIEN WEB ---
+# --- MODULE 1 : ETUDE DE FAISABILITÉ GLOBALE ---
 with tab1:
-    st.header("Analyse de PLU via Lien Internet")
-    st.write("Colle ci-dessous l'URL de la page web ou du document en ligne (PDF, texte) contenant le PLU à analyser.")
+    st.header("Analyse de Faisabilité d'Opération")
+    st.write("Renseigne les éléments du projet pour que l'IA valide la cohérence avec les règles d'urbanisme.")
+
+    col_gauche, col_droite = st.columns(2)
+
+    with col_gauche:
+        adresse_projet = st.text_input("Adresse du projet", placeholder="ex: 12 rue de la Gare, 92700 Colombes")
+        url_plu = st.text_input("URL de la page ou du document PLU", placeholder="https://...")
     
-    url_plu = st.text_input("URL du PLU (ex: https://mairie-urbanisme...)", placeholder="https://...")
-    
-    if st.button("Analyser le lien") and url_plu:
+    with col_droite:
+        description_projet = st.text_area(
+            "Description de ton projet (Objectif)", 
+            placeholder="ex: Je souhaite surélever l'immeuble existant d'un étage pour créer 2 appartements de 40m², avec une emprise au sol supplémentaire de 15m² et aucune création de place de parking.",
+            rows=4
+        )
+
+    if st.button("Lancer l'étude de faisabilité") and url_plu and description_projet:
         client = genai.Client(api_key=api_key_gemini)
         
-        with st.spinner("Gemini explore et analyse le lien fourni..."):
+        with st.spinner("Analyse du PLU et étude de faisabilité en cours..."):
             try:
                 prompt = f"""
-                Agis comme un expert en urbanisme. Navigue sur ce lien internet et analyse son contenu : {url_plu}
-                Réponds ensuite avec précision à ces questions :
-                1. Quelle est l'emprise au sol maximale (CES) autorisée ?
-                2. Quelle est la hauteur maximale autorisée au faîtage ?
-                3. Est-il possible de surélever un bâtiment existant ?
-                4. Combien de places de stationnement sont exigées pour créer un logement ?
-                Cite explicitement les numéros d'articles du PLU qui justifient tes réponses.
+                Agis comme un expert pointu en urbanisme et un consultant pour marchand de biens. 
+                
+                Voici les détails de l'opération :
+                - Adresse du bien : {adresse_projet}
+                - Projet envisagé : {description_projet}
+                
+                Mission : Navigue sur ce lien internet contenant le règlement du PLU ({url_plu}) et analyse si le projet décrit est réalisable ou s'il va être refusé par le service de l'urbanisme.
+                
+                Structure ta réponse de manière très claire :
+                1. **VERDICT** : Indique clairement si le projet semble [FAISABLE], [COMPLEXE / À MODIFIER] ou [IMPOSSIBLE].
+                2. **ANALYSE DES CRITÈRES** :
+                   - Emprise au sol (CES) : Ce que le projet prévoit vs ce que le PLU autorise.
+                   - Hauteur / Gabarit : La hauteur prévue vs la hauteur maximale autorisée au faîtage ou à l'égout.
+                   - Stationnement : Le nombre de places imposé par le PLU pour ce type de création vs le projet.
+                   - Surélévation / Destination : Est-ce autorisé dans cette zone ?
+                3. **RÉFÉRENCES JURIDIQUES** : Cite scrupuleusement les numéros d'articles du PLU (ex: Article 11, Article 12...) pour justifier chaque point.
+                4. **CONSEILS / ALTERNATIVES** : Si le projet bloque, propose une alternative pour qu'il passe (ex: réduire la surface, acheter une place de parking à proximité...).
                 """
                 
-                # Utilisation de l'outil Google Search pour permettre à l'IA de visiter l'URL
+                # Activation de la recherche Google pour la lecture de l'URL
                 reponse = client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt,
@@ -50,21 +71,20 @@ with tab1:
                     )
                 )
                 
-                st.success("Analyse du lien terminée")
-                st.write(reponse.text)
+                st.success("Étude de faisabilité terminée")
+                st.markdown(reponse.text)
                 
             except Exception as e:
-                st.error(f"Erreur lors de l'analyse du lien : {e}")
+                st.error(f"Erreur lors de l'analyse : {e}")
 
 # --- MODULE 2 : RISQUES NATURELS ---
 with tab2:
     st.header("Vérification des Risques Naturels")
-    adresse = st.text_input("Saisis l'adresse exacte du projet (ex: 10 rue de la Paix Paris)")
+    adresse = st.text_input("Saisis l'adresse pour analyser les risques", value=adresse_projet if adresse_projet else "")
     
     if st.button("Vérifier les risques") and adresse:
         with st.spinner("Recherche des données géographiques..."):
             try:
-                # 1. Appel de l'API Adresse du Gouvernement
                 res_adresse = requests.get(f"https://api-adresse.data.gouv.fr/search/?q={adresse}&limit=1").json()
                 if not res_adresse.get('features'):
                     st.error("Adresse introuvable.")
@@ -72,7 +92,6 @@ with tab2:
                     lon, lat = res_adresse['features'][0]['geometry']['coordinates']
                     st.write(f"**Coordonnées GPS :** {lat}, {lon}")
                     
-                    # 2. Appel de l'API Géorisques officielle
                     url_georisques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
                     res_georisques = requests.get(url_georisques).json()
                     
@@ -85,7 +104,7 @@ with tab2:
                     else:
                         st.info("Aucun risque majeur trouvé ou API indisponible.")
             except Exception as e:
-                st.error(f"Erreur de connexion aux API de risques : {e}")
+                st.error(f"Erreur avec l'API Géorisques : {e}")
 
 # --- MODULE 3 : BILAN & SAUVEGARDE NOTION ---
 with tab3:
