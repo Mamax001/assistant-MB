@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import os
 from google import genai
+from google.genai import types
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Assistant MDB", layout="wide", page_icon="🏗️")
@@ -29,25 +30,28 @@ with tab1:
     if st.button("Analyser le lien") and url_plu:
         client = genai.Client(api_key=api_key_gemini)
         
-        with st.spinner("Gemini explore et analyse le lien fourni..."):
+        with st.spinner("Gemini explore, navigue et analyse le lien fourni..."):
             try:
                 prompt = f"""
-                Agis comme un expert en urbanisme. Analyse le contenu accessible via ce lien internet : {url_plu}
-                Réponds ensuite avec précision à ces questions :
+                Agis comme un expert en urbanisme. Analyse avec précision les règles d'urbanisme applicables en visitant ce lien internet : {url_plu}
+                Réponds ensuite de manière détaillée à ces questions :
                 1. Quelle est l'emprise au sol maximale (CES) autorisée ?
                 2. Quelle est la hauteur maximale autorisée au faîtage ?
                 3. Est-il possible de surélever un bâtiment existant ?
                 4. Combien de places de stationnement sont exigées pour créer un logement ?
-                Cite les numéros d'articles ou les sections du document qui justifient tes réponses.
+                Cite scrupuleusement les numéros d'articles ou les sections du PLU qui justifient tes réponses.
                 """
                 
-                # Appel direct du modèle pour analyser l'URL
+                # Correction majeure : Activation obligatoire de Google Search pour permettre la lecture d'URL externes
                 reponse = client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=prompt
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
                 )
                 
-                st.success("Analyse du lien terminée")
+                st.success("Analyse du lien terminée avec succès")
                 st.write(reponse.text)
                 
             except Exception as e:
@@ -60,22 +64,27 @@ with tab2:
     
     if st.button("Vérifier les risques") and adresse:
         with st.spinner("Recherche des données géographiques..."):
-            res_adresse = requests.get(f"https://api-adresse.data.gouv.fr/search/?q={adresse}&limit=1").json()
-            if not res_adresse.get('features'):
-                st.error("Adresse introuvable.")
-            else:
-                lon, lat = res_adresse['features'][0]['geometry']['coordinates']
-                st.write(f"**Coordonnées GPS :** {lat}, {lon}")
-                
-                url_georisques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
-                res_georisques = requests.get(url_georisques).json()
-                
-                if res_georisques.get('data'):
-                    st.success("Risques identifiés dans un rayon de 1km :")
-                    for risque in res_georisques['data']:
-                        st.write(f"- {risque.get('libelle_risque_long', 'Inconnu')} (État : {whitespace_clean := risque.get('etat_arrete', 'N/A')})")
+            try:
+                res_adresse = requests.get(f"https://api-adresse.data.gouv.fr/search/?q={adresse}&limit=1").json()
+                if not res_adresse.get('features'):
+                    st.error("Adresse introuvable.")
                 else:
-                    st.info("Aucun risque majeur trouvé ou API indisponible.")
+                    lon, lat = res_adresse['features'][0]['geometry']['coordinates']
+                    st.write(f"**Coordonnées GPS :** {lat}, {lon}")
+                    
+                    url_georisques = f"https://georisques.gouv.fr/api/v1/gaspar/risques?latlon={lon},{lat}&rayon=1000"
+                    res_georisques = requests.get(url_georisques).json()
+                    
+                    if res_georisques.get('data'):
+                        st.success("Risques identifiés dans un rayon de 1km :")
+                        for risque in res_georisques['data']:
+                            libelle = risque.get('libelle_risque_long', 'Inconnu')
+                            etat = risque.get('etat_arrete', 'N/A')
+                            st.write(f"- {libelle} (État : {制造 := etat})")
+                    else:
+                        st.info("Aucun risque majeur trouvé ou API indisponible.")
+            except Exception as e:
+                st.error(f"Erreur de connexion aux API d'État : {e}")
 
 # --- MODULE 3 : BILAN & SAUVEGARDE NOTION ---
 with tab3:
@@ -91,6 +100,7 @@ with tab3:
         frais_notaire_pct = st.number_input("Frais de notaire (%)", value=2.5)
         tva_marge_pct = st.number_input("TVA sur marge (%)", value=20.0)
 
+    # Calculs financiers automatisés
     frais_notaire = prix_achat * (frais_notaire_pct / 100)
     prix_revient = prix_achat + frais_notaire + cout_travaux
     marge_brute = prix_revente - prix_revient
@@ -123,8 +133,11 @@ with tab3:
         }
         
         with st.spinner("Envoi des données vers Notion..."):
-            reponse = requests.post(url, headers=headers, json=data)
-            if reponse.status_code == 200:
-                st.success("✅ Données sauvegardées de manière permanente dans ton tableau Notion !")
-            else:
-                st.error(f"Erreur lors de la liaison avec Notion : {reponse.text}")
+            try:
+                reponse = requests.post(url, headers=headers, json=data)
+                if reponse.status_code == 200:
+                    st.success("✅ Données sauvegardées de manière permanente dans ton tableau Notion !")
+                else:
+                    st.error(f"Erreur lors de la liaison avec Notion : {reponse.text}")
+            except Exception as e:
+                st.error(f"Impossible de joindre l'API Notion : {e}")
