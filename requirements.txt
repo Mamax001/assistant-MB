@@ -1,6 +1,4 @@
-yfinance
-pandas
 streamlit
-plotly
-scikit-learn
+google-genai
 requests
+pandas
