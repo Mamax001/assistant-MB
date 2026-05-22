@@ -31,10 +31,11 @@ with tab1:
         url_plu = st.text_input("URL de la page ou du document PLU", placeholder="https://...")
     
     with col_droite:
+        # Correction ici : Remplacement de rows=4 par height=150
         description_projet = st.text_area(
             "Description de ton projet (Objectif)", 
             placeholder="ex: Je souhaite surélever l'immeuble existant d'un étage pour créer 2 appartements de 40m², avec une emprise au sol supplémentaire de 15m² et aucune création de place de parking.",
-            rows=4
+            height=150
         )
 
     if st.button("Lancer l'étude de faisabilité") and url_plu and description_projet:
@@ -62,7 +63,6 @@ with tab1:
                 4. **CONSEILS / ALTERNATIVES** : Si le projet bloque, propose une alternative pour qu'il passe (ex: réduire la surface, acheter une place de parking à proximité...).
                 """
                 
-                # Activation de la recherche Google pour la lecture de l'URL
                 reponse = client.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt,
